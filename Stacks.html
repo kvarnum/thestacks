@@ -1397,6 +1397,30 @@ async function fetchOmdbRatings(item, imdbId, attempt){
   return result;
 }
 
+// TMDB lists every company that touched a film (financiers, effects houses, small
+// production shingles) with no indication of which one is "the" studio — so prefer
+// a recognizable major distributor when one is present, rather than just picking
+// whichever company TMDB happened to list first.
+const MAJOR_STUDIO_PATTERNS = [
+  'Warner Bros', 'Universal', 'Paramount', 'Columbia Pictures', 'Sony Pictures',
+  'Walt Disney', 'Disney', '20th Century', 'Lionsgate', 'Metro-Goldwyn-Mayer', 'MGM',
+  'New Line Cinema', 'DreamWorks', 'Focus Features', 'Miramax', 'Pixar', 'Marvel Studios',
+  'Lucasfilm', 'TriStar', 'Orion Pictures', 'United Artists', 'Searchlight',
+  'Netflix', 'Amazon Studios', 'Amazon MGM', 'Apple Studios', 'Apple Original',
+  'A24', 'Legendary Pictures', 'Blumhouse'
+];
+function pickStudio(companies){
+  if(!companies || !companies.length) return '';
+  // Check patterns in priority order (not company array order), so a major distributor
+  // like Warner Bros. always wins over a secondary production company like Legendary
+  // Pictures even if the production company happens to be listed first.
+  for(const pattern of MAJOR_STUDIO_PATTERNS){
+    const match = companies.find(c => c.name && c.name.toLowerCase().includes(pattern.toLowerCase()));
+    if(match) return match.name;
+  }
+  return companies[0].name || '';
+}
+
 async function fetchTmdbDetails(item){
   const isTv = item.category === 'TV';
   const endpoint = isTv ? 'tv' : 'movie';
@@ -1473,8 +1497,7 @@ async function fetchTmdbDetails(item){
       result.genre = (detailData.genres || []).map(g => g.name);
       result.runtime = detailData.runtime || '';
 
-      const companies = detailData.production_companies || [];
-      if(companies.length) result.studio = companies[0].name || '';
+      result.studio = pickStudio(detailData.production_companies);
       movieImdbId = detailData.imdb_id || null;
     }
   } catch(e){
