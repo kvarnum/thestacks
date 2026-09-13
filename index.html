@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stacks — Media Library</title>
+<title>The Stacks — Media Library</title>
 <style>
   :root{
     --bg:#12141a;
@@ -397,16 +397,21 @@ const SEED_TV = [{"title":"1883: A Yellowstone Origin Story","season":"Season 1"
 const CATEGORY_CONFIG = {
   Movie: {
     label:'Movies', singular:'movie', aspect:'2/3', subtitleField:'studio',
-    enrichKeys:['director','cast','studio','genre','coverUrl','imdbRating','rottenTomatoesScore'],
+    enrichKeys:['director','cast','studio','genre','coverUrl','imdbRating','rottenTomatoesScore','overview','mpaRating','trailerUrl','runtime'],
+    tmdbKeys:['coverUrl','overview','mpaRating','trailerUrl','director','cast','genre','runtime'],
     fields:[
       {key:'title', label:'Title', type:'text', required:true, placeholder:'Title'},
       {key:'year', label:'Release year', type:'number', placeholder:'2024'},
       {key:'series', label:'Series (optional)', type:'text', placeholder:'e.g. Marvel Cinematic Universe'},
       {key:'studio', label:'Studio', type:'text', placeholder:'Not filled in yet'},
       {key:'genre', label:'Genre', type:'tags', placeholder:'Comma-separated, e.g. Action, Sci-Fi'},
+      {key:'mpaRating', label:'MPA rating', type:'text', placeholder:'e.g. PG-13'},
+      {key:'runtime', label:'Runtime (minutes)', type:'number', placeholder:'e.g. 152'},
       {key:'formats', label:'Formats owned', type:'checkboxes', options:['DVD','Blu-Ray','4K','Digital']},
       {key:'director', label:'Director', type:'text', placeholder:'Not filled in yet'},
       {key:'cast', label:'Main cast', type:'tags', placeholder:'Comma-separated names — main cast is plenty'},
+      {key:'overview', label:'Overview', type:'textarea', placeholder:'Short synopsis'},
+      {key:'trailerUrl', label:'Trailer link', type:'url', placeholder:'https://youtube.com/watch?v=...'},
       {key:'imdbRating', label:'IMDb rating', type:'text', placeholder:'e.g. 8.4/10'},
       {key:'rottenTomatoesScore', label:'Rotten Tomatoes score', type:'text', placeholder:'e.g. 94% Certified Fresh'},
       {key:'coverUrl', label:'Cover art URL', type:'url', placeholder:'https://...'}
@@ -414,15 +419,19 @@ const CATEGORY_CONFIG = {
   },
   TV: {
     label:'TV Shows', singular:'show', aspect:'2/3', subtitleField:'season',
-    enrichKeys:['director','cast','airDates','coverUrl'],
+    enrichKeys:['director','cast','coverUrl','overview','mpaRating','trailerUrl','episodeCount'],
+    tmdbKeys:['coverUrl','overview','mpaRating','trailerUrl','episodeCount'],
     fields:[
       {key:'title', label:'Title', type:'text', required:true, placeholder:'Title'},
       {key:'season', label:'Season', type:'text', placeholder:'e.g. Season 1, or Complete Series'},
       {key:'year', label:'Release year', type:'number', placeholder:'2024'},
-      {key:'airDates', label:'Air dates', type:'text', placeholder:'e.g. Sep 2011 – May 2012'},
+      {key:'mpaRating', label:'MPA rating', type:'text', placeholder:'e.g. TV-14'},
+      {key:'episodeCount', label:'Episodes in this season', type:'number', placeholder:'e.g. 10'},
       {key:'formats', label:'Formats owned', type:'checkboxes', options:['DVD','Blu-Ray','4K','Digital']},
       {key:'director', label:'Director', type:'text', placeholder:'Not filled in yet'},
       {key:'cast', label:'Main cast', type:'tags', placeholder:'Comma-separated names — main cast is plenty'},
+      {key:'overview', label:'Overview', type:'textarea', placeholder:'Short synopsis of this season'},
+      {key:'trailerUrl', label:'Trailer link', type:'url', placeholder:'https://youtube.com/watch?v=...'},
       {key:'coverUrl', label:'Cover art URL', type:'url', placeholder:'https://...'}
     ]
   },
@@ -715,7 +724,7 @@ function render(){
   app.innerHTML = `
     <header class="top">
       <div class="brand">
-        <h1>Stacks</h1>
+        <h1>The Stacks</h1>
         <p>Your physical &amp; digital media library</p>
       </div>
       <div class="top-actions">
@@ -881,6 +890,9 @@ function closeModal(){
 function renderFieldRow(m, field){
   const key = field.key;
   const val = m[key];
+  if(field.type==='textarea'){
+    return `<div class="field-row"><label>${escapeHtml(field.label)}</label><textarea id="f-${key}" rows="3" placeholder="${escapeHtml(field.placeholder||'')}">${escapeHtml(val||'')}</textarea></div>`;
+  }
   if(field.type==='text' || field.type==='number' || field.type==='url'){
     const v = field.type==='number' ? escapeHtml(val) : escapeHtml(val||'');
     const isbnTools = key === 'isbn' ? `
@@ -956,7 +968,7 @@ function saveModal(){
   config.fields.forEach(field=>{
     const key = field.key;
     const el = document.getElementById(`f-${key}`);
-    if(field.type==='text' || field.type==='url'){
+    if(field.type==='text' || field.type==='url' || field.type==='textarea'){
       payload[key] = el.value.trim();
     } else if(field.type==='number'){
       payload[key] = parseInt(el.value) || null;
@@ -1153,14 +1165,12 @@ async function fetchFieldBatch(item, keysBatch, attempt){
   return extractJsonObject(raw);
 }
 
-function getEnrichBatches(config){
-  const nonCover = config.enrichKeys.filter(k=>k!=='coverUrl');
+function getEnrichBatches(keys){
   const batches = [];
   const chunkSize = 1;
-  for(let i=0; i<nonCover.length; i+=chunkSize){
-    batches.push(nonCover.slice(i, i+chunkSize));
+  for(let i=0; i<keys.length; i+=chunkSize){
+    batches.push(keys.slice(i, i+chunkSize));
   }
-  if(config.enrichKeys.includes('coverUrl')) batches.push(['coverUrl']);
   return batches;
 }
 
@@ -1262,19 +1272,8 @@ function closeBarcodeScanner(){
   if(overlay) overlay.remove();
 }
 
-async function fetchTmdbCoverArt(item, attempt){
+async function tmdbRequest(url, attempt){
   attempt = attempt || 0;
-  const isTv = item.category === 'TV';
-  const endpoint = isTv ? 'tv' : 'movie';
-  const params = new URLSearchParams({ query: item.title });
-  // Movies: TMDB's year filter is precise (release year), safe to apply directly.
-  // TV: item.year usually reflects a particular season's air year, not the show's
-  // original premiere year, so filtering by it could exclude the correct show entirely.
-  if(item.year && !isTv){
-    params.set('year', String(item.year));
-  }
-  const url = `https://api.themoviedb.org/3/search/${endpoint}?${params.toString()}`;
-
   let response;
   try{
     response = await fetch(url, {
@@ -1284,19 +1283,19 @@ async function fetchTmdbCoverArt(item, attempt){
       }
     });
   } catch(networkErr){
-    if(attempt < 2){ await sleep(1000 * Math.pow(2, attempt)); return fetchTmdbCoverArt(item, attempt+1); }
+    if(attempt < 2){ await sleep(1000 * Math.pow(2, attempt)); return tmdbRequest(url, attempt+1); }
     throw new Error(`network error reaching TMDB: ${networkErr && networkErr.message ? networkErr.message : String(networkErr)}`);
   }
 
   if(response.status === 429){
-    if(attempt < 3){
+    if(attempt < 4){
       let waitMs = 1500 * Math.pow(2, attempt);
       try{
         const retryAfter = response.headers && response.headers.get && response.headers.get('retry-after');
         if(retryAfter) waitMs = Math.max(waitMs, parseFloat(retryAfter) * 1000);
       } catch(e){ /* headers not readable, fall back to computed wait */ }
       await sleep(waitMs);
-      return fetchTmdbCoverArt(item, attempt+1);
+      return tmdbRequest(url, attempt+1);
     }
     throw new Error('TMDB rate limit exceeded after retries');
   }
@@ -1304,20 +1303,44 @@ async function fetchTmdbCoverArt(item, attempt){
   if(!response.ok){
     let detail = '';
     try{ detail = (await readFullBody(response)).slice(0,200); } catch(e){}
-    throw new Error(`TMDB search failed (HTTP ${response.status})${detail ? ': ' + detail : ''}`);
+    throw new Error(`TMDB request failed (HTTP ${response.status})${detail ? ': ' + detail : ''}`);
   }
 
-  let data;
+  let bodyText;
   try{
-    const bodyText = await readFullBody(response);
-    data = JSON.parse(bodyText);
+    bodyText = await readFullBody(response);
   } catch(e){
-    if(attempt < 2){ await sleep(800 * (attempt+1)); return fetchTmdbCoverArt(item, attempt+1); }
-    throw new Error('TMDB response was not valid JSON');
+    if(attempt < 2){ await sleep(800 * (attempt+1)); return tmdbRequest(url, attempt+1); }
+    throw new Error('could not read the TMDB response');
   }
 
-  const results = data.results || [];
-  if(results.length === 0) return { coverUrl: '' };
+  if(!bodyText || !bodyText.trim()){
+    if(attempt < 3){ await sleep(700 * Math.pow(2, attempt)); return tmdbRequest(url, attempt+1); }
+    throw new Error(`TMDB returned a completely empty response body after retries`);
+  }
+
+  try{
+    return JSON.parse(bodyText);
+  } catch(e){
+    if(attempt < 2){ await sleep(800 * (attempt+1)); return tmdbRequest(url, attempt+1); }
+    throw new Error(`TMDB response was not valid JSON: ${bodyText.slice(0,150)}`);
+  }
+}
+
+async function fetchTmdbDetails(item){
+  const isTv = item.category === 'TV';
+  const endpoint = isTv ? 'tv' : 'movie';
+  const params = new URLSearchParams({ query: item.title });
+  // Movies: TMDB's year filter is precise (release year), safe to apply directly.
+  // TV: item.year usually reflects a particular season's air year, not the show's
+  // original premiere year, so filtering by it could exclude the correct show entirely.
+  if(item.year && !isTv){
+    params.set('year', String(item.year));
+  }
+  const searchUrl = `https://api.themoviedb.org/3/search/${endpoint}?${params.toString()}`;
+  const searchData = await tmdbRequest(searchUrl);
+  const results = searchData.results || [];
+  if(results.length === 0) return { coverUrl:'', overview:'', mpaRating:'', trailerUrl:'', director:'', cast:[], genre:[], runtime:'', episodeCount:'' };
 
   let best = results[0];
   if(item.year && !isTv){
@@ -1325,23 +1348,94 @@ async function fetchTmdbCoverArt(item, attempt){
     if(yearMatch) best = yearMatch;
   }
 
-  if(!best.poster_path) return { coverUrl: '' };
-  return { coverUrl: `${TMDB_IMAGE_BASE}${best.poster_path}` };
+  const result = {
+    coverUrl: best.poster_path ? `${TMDB_IMAGE_BASE}${best.poster_path}` : '',
+    overview: best.overview || '',
+    mpaRating: '',
+    trailerUrl: '',
+    director: '',
+    cast: [],
+    genre: [],
+    runtime: '',
+    episodeCount: ''
+  };
+
+  if(!best.id) return result;
+
+  await sleep(300);
+  try{
+    // credits and genres are only actually used for movies (per Movie's tmdbKeys), but
+    // requesting them here costs nothing extra for TV since TV's config just won't read them
+    const appendParam = isTv ? 'content_ratings,videos' : 'release_dates,videos,credits';
+    const detailUrl = `https://api.themoviedb.org/3/${endpoint}/${best.id}?append_to_response=${appendParam}`;
+    const detailData = await tmdbRequest(detailUrl);
+
+    const videos = (detailData.videos && detailData.videos.results) || [];
+    const trailer = videos.find(v => v.site === 'YouTube' && v.type === 'Trailer') || videos.find(v => v.site === 'YouTube');
+    if(trailer) result.trailerUrl = `https://www.youtube.com/watch?v=${trailer.key}`;
+
+    if(isTv){
+      const ratings = (detailData.content_ratings && detailData.content_ratings.results) || [];
+      const us = ratings.find(r => r.iso_3166_1 === 'US');
+      if(us) result.mpaRating = us.rating || '';
+    } else {
+      const releaseDates = (detailData.release_dates && detailData.release_dates.results) || [];
+      const us = releaseDates.find(r => r.iso_3166_1 === 'US');
+      const certEntry = us && (us.release_dates || []).find(rd => rd.certification);
+      if(certEntry) result.mpaRating = certEntry.certification || '';
+
+      const crew = (detailData.credits && detailData.credits.crew) || [];
+      const directors = crew.filter(c => c.job === 'Director').map(c => c.name);
+      result.director = directors.join(', ');
+
+      const castList = (detailData.credits && detailData.credits.cast) || [];
+      result.cast = castList.slice(0, 5).map(c => c.name);
+
+      result.genre = (detailData.genres || []).map(g => g.name);
+      result.runtime = detailData.runtime || '';
+    }
+  } catch(e){
+    // cover art and overview already came from the search call, so this is a
+    // partial-success case — leave the rest blank rather than fail the whole item
+    console.error('TMDB detail lookup failed', e);
+  }
+
+  // TV: the show-level overview above is generic — swap in the season-specific
+  // synopsis and episode count when we can tell which season this entry is.
+  if(isTv){
+    const seasonMatch = (item.season || '').match(/(\d+)/);
+    const seasonNumber = seasonMatch ? parseInt(seasonMatch[1]) : null;
+    if(seasonNumber !== null){
+      await sleep(300);
+      try{
+        const seasonUrl = `https://api.themoviedb.org/3/tv/${best.id}/season/${seasonNumber}`;
+        const seasonData = await tmdbRequest(seasonUrl);
+        if(seasonData.overview) result.overview = seasonData.overview;
+        if(Array.isArray(seasonData.episodes)) result.episodeCount = seasonData.episodes.length;
+      } catch(e){
+        console.error('TMDB season lookup failed', e);
+      }
+    }
+  }
+
+  return result;
 }
 
 async function fetchItemDetails(item){
   const config = CATEGORY_CONFIG[item.category];
-  const batches = getEnrichBatches(config);
-  const usesTmdb = item.category === 'Movie' || item.category === 'TV';
+  const tmdbKeys = config.tmdbKeys || [];
   const merged = {};
+
+  if(tmdbKeys.length > 0){
+    const tmdbResult = await fetchTmdbDetails(item);
+    tmdbKeys.forEach(k => { if(k in tmdbResult) merged[k] = tmdbResult[k]; });
+    await sleep(300);
+  }
+
+  const aiKeys = config.enrichKeys.filter(k => !tmdbKeys.includes(k));
+  const batches = getEnrichBatches(aiKeys);
   for(let i=0; i<batches.length; i++){
-    const batchKeys = batches[i];
-    let partial;
-    if(usesTmdb && batchKeys.length === 1 && batchKeys[0] === 'coverUrl'){
-      partial = await fetchTmdbCoverArt(item);
-    } else {
-      partial = await fetchFieldBatch(item, batchKeys);
-    }
+    const partial = await fetchFieldBatch(item, batches[i]);
     Object.assign(merged, partial);
     if(i < batches.length - 1) await sleep(300);
   }
