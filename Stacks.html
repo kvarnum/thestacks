@@ -496,12 +496,12 @@ const CATEGORY_CONFIG = {
       {key:'year', label:'Release year', type:'number', placeholder:'2024'},
       {key:'developer', label:'Developer', type:'text', placeholder:'Not filled in yet'},
       {key:'publisher', label:'Publisher', type:'text', placeholder:'Not filled in yet'},
-      {key:'format', label:'Format', type:'select', options:['Physical','Digital']},
       {key:'console', label:'Console(s) owned on', type:'checkboxes', options:[
         'PC','Playstation 5','Playstation 4','Playstation 3','Xbox Series X','Xbox 360','Xbox Original',
         'Nintendo 64','Nintendo Game Boy Color','Nintendo 2DS','Nintendo 3DS','Nintendo Switch 1',
         'Nintendo Switch 2','Nintendo Wii U','PSP'
       ]},
+      {key:'format', label:'Format(s) owned', type:'checkboxes', options:['Physical','Digital']},
       {key:'steamRating', label:'Steam review rating (PC)', type:'text', placeholder:'e.g. 95% Very Positive'},
       {key:'metacriticRating', label:'Metacritic score', type:'number', placeholder:'e.g. 87'},
       {key:'theme', label:'Theme', type:'text', placeholder:'e.g. First-person shooter, RPG, Platformer'},
@@ -1581,10 +1581,25 @@ async function fetchGoogleBooksDetails(item, attempt){
     throw new Error(`network error reaching Google Books: ${networkErr && networkErr.message ? networkErr.message : String(networkErr)}`);
   }
 
+  if(response.status === 429){
+    slowDown();
+    if(attempt < 4){
+      let waitMs = 1500 * Math.pow(2, attempt);
+      try{
+        const retryAfter = response.headers && response.headers.get && response.headers.get('retry-after');
+        if(retryAfter) waitMs = Math.max(waitMs, parseFloat(retryAfter) * 1000);
+      } catch(e){ /* headers not readable, fall back to computed wait */ }
+      await sleep(waitMs);
+      return fetchGoogleBooksDetails(item, attempt+1);
+    }
+    throw new Error('Google Books rate limit exceeded after retries — wait a minute before scanning more books');
+  }
+
   if(!response.ok){
     if(response.status >= 500 && attempt < 2){ await sleep(1000 * Math.pow(2, attempt)); return fetchGoogleBooksDetails(item, attempt+1); }
     throw new Error(`Google Books request failed (HTTP ${response.status})`);
   }
+  speedUpSlightly();
 
   let bodyText;
   try{ bodyText = await readFullBody(response); } catch(e){ throw new Error('could not read the Google Books response'); }
