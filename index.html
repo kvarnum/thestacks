@@ -455,7 +455,8 @@ const CATEGORY_CONFIG = {
   },
   Book: {
     label:'Books', singular:'book', aspect:'2/3', subtitleField:'author',
-    enrichKeys:['author','publisher','genre','coverUrl','goodreadsRating'],
+    enrichKeys:['author','publisher','genre','coverUrl','goodreadsRating','overview','pageCount'],
+    googleBooksKeys:['author','publisher','genre','coverUrl','goodreadsRating','overview','pageCount'],
     fields:[
       {key:'title', label:'Title', type:'text', required:true, placeholder:'Title'},
       {key:'year', label:'Release year', type:'number', placeholder:'2024'},
@@ -466,7 +467,9 @@ const CATEGORY_CONFIG = {
       {key:'publisher', label:'Publisher', type:'text', placeholder:'Not filled in yet'},
       {key:'series', label:'Series (optional)', type:'text', placeholder:'e.g. a book series'},
       {key:'genre', label:'Genre', type:'tags', placeholder:'Comma-separated'},
-      {key:'goodreadsRating', label:'Goodreads rating', type:'text', placeholder:'e.g. 4.32/5'},
+      {key:'pageCount', label:'Pages', type:'number', placeholder:'e.g. 320'},
+      {key:'overview', label:'Overview', type:'textarea', placeholder:'Short synopsis'},
+      {key:'goodreadsRating', label:'Rating (Google Books)', type:'text', placeholder:'e.g. 4.2/5'},
       {key:'coverUrl', label:'Cover art URL', type:'url', placeholder:'https://...'}
     ]
   },
@@ -487,6 +490,7 @@ const CATEGORY_CONFIG = {
   Game: {
     label:'Video Games', singular:'game', aspect:'3/4', subtitleField:'developer',
     enrichKeys:['developer','publisher','genre','coverUrl','steamRating','metacriticRating'],
+    rawgKeys:['developer','publisher','genre','coverUrl','metacriticRating'],
     fields:[
       {key:'title', label:'Title', type:'text', required:true, placeholder:'Title'},
       {key:'year', label:'Release year', type:'number', placeholder:'2024'},
@@ -518,6 +522,10 @@ const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500";
 // OMDb provides IMDb and Rotten Tomatoes ratings directly, and (unlike the AI-search
 // path) is a plain public API meant for direct browser use — no CORS surprises.
 const OMDB_API_KEY = "b8f2bf12";
+
+// RAWG covers video games directly by title search — developer, publisher, genre,
+// cover art, and its own Metacritic-style score, all from a free key.
+const RAWG_API_KEY = "2b3dccb6a6da49978a8a7f83b5ad31b7";
 
 const FORMAT_COLOR_MAP = {'DVD':'#6e8fb0','Blu-Ray':'#b0475c','4K':'#d4a544','Digital':'#5fa88c'};
 const FORMAT_FALLBACK_PALETTE = ['#8a6fb0','#c97a4a','#4c8ef0','#7a9e4a','#b0a0d0','#4aa0a8','#c96e8f','#6ab08a','#a88a4a','#7a8fc9'];
@@ -1210,23 +1218,21 @@ async function lookupByIsbn(){
   if(!isbn){ showToast('Enter an ISBN first'); return; }
   showToast('Looking up ISBN…');
   try{
-    const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn)}`);
-    if(!response.ok) throw new Error(`Google Books request failed (HTTP ${response.status})`);
-    const bodyText = await readFullBody(response);
-    const data = JSON.parse(bodyText);
-    if(!data.items || data.items.length === 0){
+    const result = await fetchGoogleBooksDetails({ isbn });
+    if(!result.title && !result.author && !result.publisher && !result.coverUrl){
       showToast('No book found for that ISBN');
       return;
     }
-    const info = data.items[0].volumeInfo || {};
     const setVal = (id, v) => { const el = document.getElementById(id); if(el && v !== undefined && v !== null && v !== '') el.value = v; };
-    setVal('f-title', info.title);
-    setVal('f-author', (info.authors||[]).join(', '));
-    setVal('f-publisher', info.publisher);
-    if(info.publishedDate) setVal('f-year', parseInt(info.publishedDate.slice(0,4)));
-    setVal('f-genre', (info.categories||[]).join(', '));
-    const cover = info.imageLinks && (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail);
-    if(cover) setVal('f-coverUrl', cover.replace(/^http:/, 'https:'));
+    setVal('f-title', result.title);
+    setVal('f-year', result.year);
+    setVal('f-author', result.author);
+    setVal('f-publisher', result.publisher);
+    setVal('f-genre', (result.genre||[]).join(', '));
+    setVal('f-coverUrl', result.coverUrl);
+    setVal('f-overview', result.overview);
+    setVal('f-pageCount', result.pageCount);
+    setVal('f-goodreadsRating', result.goodreadsRating);
     showToast('Filled in from Google Books — review before saving');
   } catch(e){
     console.error('ISBN lookup failed', e);
@@ -1554,17 +1560,160 @@ function isFieldFilled(item, config, key){
     : !!item[key];
 }
 
+async function fetchGoogleBooksDetails(item, attempt){
+  attempt = attempt || 0;
+  let query;
+  if(item.isbn && item.isbn.trim()){
+    query = `isbn:${item.isbn.trim().replace(/[\s-]/g, '')}`;
+  } else {
+    const parts = [`intitle:${item.title || ''}`];
+    if(item.author) parts.push(`inauthor:${item.author}`);
+    query = parts.join('+');
+  }
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}`;
+
+  let response;
+  try{
+    response = await fetch(url);
+  } catch(networkErr){
+    if(attempt < 2){ await sleep(1000 * Math.pow(2, attempt)); return fetchGoogleBooksDetails(item, attempt+1); }
+    throw new Error(`network error reaching Google Books: ${networkErr && networkErr.message ? networkErr.message : String(networkErr)}`);
+  }
+
+  if(!response.ok){
+    if(response.status >= 500 && attempt < 2){ await sleep(1000 * Math.pow(2, attempt)); return fetchGoogleBooksDetails(item, attempt+1); }
+    throw new Error(`Google Books request failed (HTTP ${response.status})`);
+  }
+
+  let bodyText;
+  try{ bodyText = await readFullBody(response); } catch(e){ throw new Error('could not read the Google Books response'); }
+
+  let data;
+  try{ data = JSON.parse(bodyText); } catch(e){ throw new Error(`Google Books response was not valid JSON: ${bodyText.slice(0,150)}`); }
+
+  const result = { title:'', year:'', author:'', publisher:'', genre:[], coverUrl:'', goodreadsRating:'', overview:'', pageCount:'' };
+  const items = data.items || [];
+  if(items.length === 0) return result;
+
+  const info = items[0].volumeInfo || {};
+  if(info.title) result.title = info.title;
+  if(info.publishedDate) result.year = parseInt(info.publishedDate.slice(0,4)) || '';
+  if(info.authors) result.author = info.authors.join(', ');
+  if(info.publisher) result.publisher = info.publisher;
+  if(info.categories) result.genre = info.categories;
+  const thumb = info.imageLinks && (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail);
+  if(thumb) result.coverUrl = thumb.replace(/^http:/, 'https:');
+  if(info.averageRating) result.goodreadsRating = `${info.averageRating}/5`;
+  if(info.description) result.overview = info.description;
+  if(info.pageCount) result.pageCount = info.pageCount;
+  return result;
+}
+
+async function rawgRequest(url, attempt){
+  attempt = attempt || 0;
+  let response;
+  try{
+    response = await fetch(url);
+  } catch(networkErr){
+    if(attempt < 2){ await sleep(1000 * Math.pow(2, attempt)); return rawgRequest(url, attempt+1); }
+    throw new Error(`network error reaching RAWG: ${networkErr && networkErr.message ? networkErr.message : String(networkErr)}`);
+  }
+
+  if(response.status === 429){
+    if(attempt < 3){
+      let waitMs = 1500 * Math.pow(2, attempt);
+      try{
+        const retryAfter = response.headers && response.headers.get && response.headers.get('retry-after');
+        if(retryAfter) waitMs = Math.max(waitMs, parseFloat(retryAfter) * 1000);
+      } catch(e){ /* headers not readable, fall back to computed wait */ }
+      await sleep(waitMs);
+      return rawgRequest(url, attempt+1);
+    }
+    throw new Error('RAWG rate limit exceeded after retries');
+  }
+
+  if(!response.ok){
+    let detail = '';
+    try{ detail = (await readFullBody(response)).slice(0,200); } catch(e){}
+    throw new Error(`RAWG request failed (HTTP ${response.status})${detail ? ': ' + detail : ''}`);
+  }
+
+  let bodyText;
+  try{
+    bodyText = await readFullBody(response);
+  } catch(e){
+    if(attempt < 2){ await sleep(800 * (attempt+1)); return rawgRequest(url, attempt+1); }
+    throw new Error('could not read the RAWG response');
+  }
+
+  if(!bodyText || !bodyText.trim()){
+    if(attempt < 3){ await sleep(700 * Math.pow(2, attempt)); return rawgRequest(url, attempt+1); }
+    throw new Error('RAWG returned a completely empty response body after retries');
+  }
+
+  try{
+    return JSON.parse(bodyText);
+  } catch(e){
+    if(attempt < 2){ await sleep(800 * (attempt+1)); return rawgRequest(url, attempt+1); }
+    throw new Error(`RAWG response was not valid JSON: ${bodyText.slice(0,150)}`);
+  }
+}
+
+async function fetchRawgDetails(item){
+  const result = { developer:'', publisher:'', genre:[], coverUrl:'', metacriticRating:'', year:'' };
+
+  const params = new URLSearchParams({ key: RAWG_API_KEY, search: item.title, page_size: '5' });
+  const searchUrl = `https://api.rawg.io/api/games?${params.toString()}`;
+  const searchData = await rawgRequest(searchUrl);
+  const results = searchData.results || [];
+  if(results.length === 0) return result;
+
+  let best = results[0];
+  if(item.year){
+    const yearMatch = results.find(r => r.released && parseInt(r.released.slice(0,4)) === item.year);
+    if(yearMatch) best = yearMatch;
+  }
+  result.coverUrl = best.background_image || '';
+  result.genre = (best.genres || []).map(g => g.name);
+  if(best.metacritic) result.metacriticRating = best.metacritic;
+  if(best.released) result.year = parseInt(best.released.slice(0,4)) || '';
+
+  if(!best.id) return result;
+
+  await sleep(300);
+  try{
+    const detailUrl = `https://api.rawg.io/api/games/${best.id}?key=${RAWG_API_KEY}`;
+    const detailData = await rawgRequest(detailUrl);
+    if(Array.isArray(detailData.developers) && detailData.developers.length){
+      result.developer = detailData.developers.map(d => d.name).join(', ');
+    }
+    if(Array.isArray(detailData.publishers) && detailData.publishers.length){
+      result.publisher = detailData.publishers.map(p => p.name).join(', ');
+    }
+    if(!result.coverUrl && detailData.background_image) result.coverUrl = detailData.background_image;
+  } catch(e){
+    // search-level data (cover, genre, metacritic) already succeeded, so this is a
+    // partial-success case — leave developer/publisher blank rather than fail the whole item
+    console.error('RAWG detail lookup failed', e);
+  }
+
+  return result;
+}
+
 async function fetchItemDetails(item){
   const config = CATEGORY_CONFIG[item.category];
-  const tmdbKeysAll = config.tmdbKeys || [];
+  const specialKeysAll = config.tmdbKeys || config.googleBooksKeys || config.rawgKeys || [];
   const neededKeys = config.enrichKeys.filter(k => !isFieldFilled(item, config, k));
-  const neededTmdbKeys = tmdbKeysAll.filter(k => neededKeys.includes(k));
-  const neededAiKeys = neededKeys.filter(k => !tmdbKeysAll.includes(k));
+  const neededSpecialKeys = specialKeysAll.filter(k => neededKeys.includes(k));
+  const neededAiKeys = neededKeys.filter(k => !specialKeysAll.includes(k));
   const merged = {};
 
-  if(neededTmdbKeys.length > 0){
-    const tmdbResult = await fetchTmdbDetails(item);
-    neededTmdbKeys.forEach(k => { if(k in tmdbResult) merged[k] = tmdbResult[k]; });
+  if(neededSpecialKeys.length > 0){
+    let specialResult;
+    if(config.tmdbKeys) specialResult = await fetchTmdbDetails(item);
+    else if(config.googleBooksKeys) specialResult = await fetchGoogleBooksDetails(item);
+    else specialResult = await fetchRawgDetails(item);
+    neededSpecialKeys.forEach(k => { if(k in specialResult) merged[k] = specialResult[k]; });
     await sleep(300);
   }
 
