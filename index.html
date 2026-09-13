@@ -1523,19 +1523,29 @@ async function fetchTmdbDetails(item){
   return result;
 }
 
+function isFieldFilled(item, config, key){
+  const fieldDesc = config.fields.find(f => f.key === key);
+  if(!fieldDesc) return false;
+  return fieldDesc.type === 'tags'
+    ? Array.isArray(item[key]) && item[key].length > 0
+    : !!item[key];
+}
+
 async function fetchItemDetails(item){
   const config = CATEGORY_CONFIG[item.category];
-  const tmdbKeys = config.tmdbKeys || [];
+  const tmdbKeysAll = config.tmdbKeys || [];
+  const neededKeys = config.enrichKeys.filter(k => !isFieldFilled(item, config, k));
+  const neededTmdbKeys = tmdbKeysAll.filter(k => neededKeys.includes(k));
+  const neededAiKeys = neededKeys.filter(k => !tmdbKeysAll.includes(k));
   const merged = {};
 
-  if(tmdbKeys.length > 0){
+  if(neededTmdbKeys.length > 0){
     const tmdbResult = await fetchTmdbDetails(item);
-    tmdbKeys.forEach(k => { if(k in tmdbResult) merged[k] = tmdbResult[k]; });
+    neededTmdbKeys.forEach(k => { if(k in tmdbResult) merged[k] = tmdbResult[k]; });
     await sleep(300);
   }
 
-  const aiKeys = config.enrichKeys.filter(k => !tmdbKeys.includes(k));
-  const batches = getEnrichBatches(aiKeys);
+  const batches = getEnrichBatches(neededAiKeys);
   for(let i=0; i<batches.length; i++){
     const partial = await fetchFieldBatch(item, batches[i]);
     Object.assign(merged, partial);
@@ -1550,13 +1560,18 @@ function applyDetails(idx, details){
   const keys = config.enrichKeys.filter(k=>k!=='coverUrl');
   keys.forEach(k=>{
     const fieldDesc = config.fields.find(f=>f.key===k);
-    if(fieldDesc.type==='tags'){
+    const isTagsField = fieldDesc.type === 'tags';
+    const alreadyHasValue = isTagsField
+      ? Array.isArray(item[k]) && item[k].length > 0
+      : !!item[k];
+    if(alreadyHasValue) return; // never overwrite something already filled in — by hand or by an earlier lookup
+    if(isTagsField){
       item[k] = Array.isArray(details[k]) ? details[k] : [];
     } else {
       item[k] = details[k] || '';
     }
   });
-  if(details.coverUrl) item.coverUrl = details.coverUrl;
+  if(!item.coverUrl && details.coverUrl) item.coverUrl = details.coverUrl;
   item.enriched = true;
 }
 
@@ -1624,6 +1639,12 @@ function stopEnrichment(){
 async function enrichOne(id){
   const item = state.items.find(m=>m.id===id);
   if(!item) return;
+  const config = CATEGORY_CONFIG[item.category];
+  const stillNeeded = config.enrichKeys.filter(k => !isFieldFilled(item, config, k));
+  if(stillNeeded.length === 0){
+    showToast('Every field here is already filled in');
+    return;
+  }
   showToast('Looking up details…');
   try{
     const details = await fetchItemDetails(item);
