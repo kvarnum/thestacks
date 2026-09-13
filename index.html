@@ -489,7 +489,7 @@ const CATEGORY_CONFIG = {
   },
   Game: {
     label:'Video Games', singular:'game', aspect:'3/4', subtitleField:'developer',
-    enrichKeys:['developer','publisher','genre','coverUrl','steamRating','metacriticRating'],
+    enrichKeys:['developer','publisher','genre','coverUrl','metacriticRating'],
     rawgKeys:['developer','publisher','genre','coverUrl','metacriticRating'],
     fields:[
       {key:'title', label:'Title', type:'text', required:true, placeholder:'Title'},
@@ -1236,7 +1236,8 @@ async function lookupByIsbn(){
     showToast('Filled in from Google Books — review before saving');
   } catch(e){
     console.error('ISBN lookup failed', e);
-    showToast('Could not look up that ISBN — check your connection or enter details manually');
+    const detail = (e && e.message) ? e.message : String(e);
+    showToast(`Could not look up that ISBN — ${detail.slice(0,150)}`, 8000);
   }
 }
 
@@ -1796,9 +1797,9 @@ async function startEnrichment(){
   } else if(circuitBroken){
     showToast(`Paused after repeated failures — ${stillRemaining} left. Latest error: ${lastErrorMessage.slice(0,150)}`, 12000);
   } else if(stillRemaining > 0){
-    showToast(`Filled in this batch (${failCount} needed a manual look) — ${stillRemaining} left. Click again to continue.`);
+    showToast(`Filled in this batch (${failCount} needed a manual look) — ${stillRemaining} left. Latest error: ${lastErrorMessage.slice(0,150)}`, 10000);
   } else if(failCount > 0){
-    showToast(`Done — ${failCount} needed a manual look`);
+    showToast(`Done — ${failCount} needed a manual look. Latest error: ${lastErrorMessage.slice(0,150)}`, 10000);
   } else {
     showToast('Finished filling in your library');
   }
