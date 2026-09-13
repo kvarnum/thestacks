@@ -420,7 +420,7 @@ const CATEGORY_CONFIG = {
   TV: {
     label:'TV Shows', singular:'show', aspect:'2/3', subtitleField:'season',
     enrichKeys:['director','cast','coverUrl','overview','mpaRating','trailerUrl','episodeCount'],
-    tmdbKeys:['coverUrl','overview','mpaRating','trailerUrl','episodeCount'],
+    tmdbKeys:['coverUrl','overview','mpaRating','trailerUrl','episodeCount','director','cast'],
     fields:[
       {key:'title', label:'Title', type:'text', required:true, placeholder:'Title'},
       {key:'season', label:'Season', type:'text', placeholder:'e.g. Season 1, or Complete Series'},
@@ -601,12 +601,14 @@ async function saveLibrary(){
   }
 }
 
-function showToast(msg){
+function showToast(msg, durationMs){
   const el = document.createElement('div');
   el.className = 'toast';
+  el.style.maxWidth = '90vw';
+  el.style.textAlign = 'center';
   el.textContent = msg;
   document.body.appendChild(el);
-  setTimeout(()=>el.remove(), 2600);
+  setTimeout(()=>el.remove(), durationMs || 2600);
 }
 
 function escapeHtml(s){
@@ -1378,6 +1380,11 @@ async function fetchTmdbDetails(item){
       const ratings = (detailData.content_ratings && detailData.content_ratings.results) || [];
       const us = ratings.find(r => r.iso_3166_1 === 'US');
       if(us) result.mpaRating = us.rating || '';
+
+      // Fallback "director" for TV: the show's credited creator(s). This gets
+      // replaced below with actual season-specific episode directors when available.
+      const creators = (detailData.created_by || []).map(c => c.name);
+      if(creators.length) result.director = creators.join(', ');
     } else {
       const releaseDates = (detailData.release_dates && detailData.release_dates.results) || [];
       const us = releaseDates.find(r => r.iso_3166_1 === 'US');
@@ -1400,18 +1407,25 @@ async function fetchTmdbDetails(item){
     console.error('TMDB detail lookup failed', e);
   }
 
-  // TV: the show-level overview above is generic — swap in the season-specific
-  // synopsis and episode count when we can tell which season this entry is.
+  // TV: the show-level overview/director above are generic — swap in the season-specific
+  // synopsis, episode count, and episode directors/cast when we can tell which season this is.
   if(isTv){
     const seasonMatch = (item.season || '').match(/(\d+)/);
     const seasonNumber = seasonMatch ? parseInt(seasonMatch[1]) : null;
     if(seasonNumber !== null){
       await sleep(300);
       try{
-        const seasonUrl = `https://api.themoviedb.org/3/tv/${best.id}/season/${seasonNumber}`;
+        const seasonUrl = `https://api.themoviedb.org/3/tv/${best.id}/season/${seasonNumber}?append_to_response=credits`;
         const seasonData = await tmdbRequest(seasonUrl);
         if(seasonData.overview) result.overview = seasonData.overview;
         if(Array.isArray(seasonData.episodes)) result.episodeCount = seasonData.episodes.length;
+
+        const crew = (seasonData.credits && seasonData.credits.crew) || [];
+        const directors = [...new Set(crew.filter(c => c.job === 'Director').map(c => c.name))];
+        if(directors.length) result.director = directors.join(', ');
+
+        const castList = (seasonData.credits && seasonData.credits.cast) || [];
+        if(castList.length) result.cast = castList.slice(0, 5).map(c => c.name);
       } catch(e){
         console.error('TMDB season lookup failed', e);
       }
@@ -1475,6 +1489,7 @@ async function startEnrichment(){
   let failCount = 0;
   let consecutiveFails = 0;
   let circuitBroken = false;
+  let lastErrorMessage = '';
   for(const item of todo){
     if(enrichStopped) break;
     try{
@@ -1485,6 +1500,7 @@ async function startEnrichment(){
     } catch(e){
       failCount++;
       consecutiveFails++;
+      lastErrorMessage = (e && e.message) ? e.message : String(e);
       console.error('enrich failed for', item.title, e);
       if(consecutiveFails >= ENRICH_CONSECUTIVE_FAIL_LIMIT){
         circuitBroken = true;
@@ -1503,7 +1519,7 @@ async function startEnrichment(){
   if(enrichStopped){
     showToast('Stopped — pick up again anytime');
   } else if(circuitBroken){
-    showToast(`Paused after repeated rate limits — ${stillRemaining} left. Wait a minute or two, then click "Fill in remaining details" again.`);
+    showToast(`Paused after repeated failures — ${stillRemaining} left. Latest error: ${lastErrorMessage.slice(0,150)}`, 12000);
   } else if(stillRemaining > 0){
     showToast(`Filled in this batch (${failCount} needed a manual look) — ${stillRemaining} left. Click again to continue.`);
   } else if(failCount > 0){
