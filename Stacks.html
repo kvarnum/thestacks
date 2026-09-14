@@ -414,7 +414,7 @@ const SEED_TV = [{"title":"1883: A Yellowstone Origin Story","season":"Season 1"
 */
 const CATEGORY_CONFIG = {
   Movie: {
-    label:'Movies', singular:'movie', aspect:'2/3', subtitleField:'studio',
+    label:'Movies', singular:'movie', aspect:'2/3', subtitleField:'studio', creatorField:'director',
     enrichKeys:['director','cast','studio','genre','coverUrl','imdbRating','rottenTomatoesScore','overview','mpaRating','trailerUrl','runtime'],
     tmdbKeys:['coverUrl','overview','mpaRating','trailerUrl','director','cast','genre','runtime','studio','imdbRating','rottenTomatoesScore'],
     fields:[
@@ -436,7 +436,7 @@ const CATEGORY_CONFIG = {
     ]
   },
   TV: {
-    label:'TV Shows', singular:'show', aspect:'2/3', subtitleField:'season',
+    label:'TV Shows', singular:'show', aspect:'2/3', subtitleField:'season', creatorField:'director',
     enrichKeys:['director','cast','coverUrl','overview','mpaRating','trailerUrl','episodeCount'],
     tmdbKeys:['coverUrl','overview','mpaRating','trailerUrl','episodeCount','director','cast'],
     fields:[
@@ -454,7 +454,7 @@ const CATEGORY_CONFIG = {
     ]
   },
   Book: {
-    label:'Books', singular:'book', aspect:'2/3', subtitleField:'author',
+    label:'Books', singular:'book', aspect:'2/3', subtitleField:'author', creatorField:'author',
     enrichKeys:['author','publisher','genre','coverUrl','goodreadsRating','overview','pageCount'],
     googleBooksKeys:['author','publisher','genre','coverUrl','goodreadsRating','overview','pageCount'],
     fields:[
@@ -474,7 +474,7 @@ const CATEGORY_CONFIG = {
     ]
   },
   Vinyl: {
-    label:'Vinyl', singular:'record', aspect:'1/1', subtitleField:'artist',
+    label:'Vinyl', singular:'record', aspect:'1/1', subtitleField:'artist', creatorField:'artist',
     enrichKeys:['artist','label','genre','coverUrl','discogsRating'],
     fields:[
       {key:'title', label:'Album title', type:'text', required:true, placeholder:'Album title'},
@@ -488,7 +488,7 @@ const CATEGORY_CONFIG = {
     ]
   },
   Game: {
-    label:'Video Games', singular:'game', aspect:'3/4', subtitleField:'developer',
+    label:'Video Games', singular:'game', aspect:'3/4', subtitleField:'developer', creatorField:'developer',
     enrichKeys:['developer','publisher','genre','coverUrl','metacriticRating'],
     rawgKeys:['developer','publisher','genre','coverUrl','metacriticRating'],
     fields:[
@@ -658,6 +658,19 @@ function sortableTitle(title){
   return (title || '').replace(/^(The|A|An)\s+/i, '');
 }
 
+const SURNAME_PARTICLES = new Set(['le','la','de','van','von','del','della','di','da','du','des','dos','das','mac','mc']);
+
+function creatorLastName(name){
+  if(!name) return '';
+  const firstName = name.split(',')[0].trim(); // if multiple people are listed, sort by the first
+  const parts = firstName.split(/\s+/).filter(Boolean);
+  if(!parts.length) return '';
+  if(parts.length >= 2 && SURNAME_PARTICLES.has(parts[parts.length - 2].toLowerCase())){
+    return parts.slice(-2).join(' ');
+  }
+  return parts[parts.length - 1];
+}
+
 function getFiltered(){
   const config = CATEGORY_CONFIG[state.activeCategory];
   const chipField = getChipField(config);
@@ -685,6 +698,8 @@ function getFiltered(){
     list.sort((a,b)=>(a.year||0)-(b.year||0));
   } else if(state.sortBy === 'recent'){
     list.sort((a,b)=>(state.items.indexOf(b)) - (state.items.indexOf(a)));
+  } else if(state.sortBy === 'creator-lastname' && config.creatorField){
+    list.sort((a,b)=>creatorLastName(a[config.creatorField]).localeCompare(creatorLastName(b[config.creatorField])));
   }
   return list;
 }
@@ -820,6 +835,7 @@ function render(){
           <option value="year-desc" ${state.sortBy==='year-desc'?'selected':''}>Newest first</option>
           <option value="year-asc" ${state.sortBy==='year-asc'?'selected':''}>Oldest first</option>
           <option value="recent" ${state.sortBy==='recent'?'selected':''}>Recently added</option>
+          ${config.creatorField ? `<option value="creator-lastname" ${state.sortBy==='creator-lastname'?'selected':''}>${escapeHtml(config.fields.find(f=>f.key===config.creatorField).label)} last name</option>` : ''}
         </select>
       </div>
     </div>
@@ -1621,11 +1637,35 @@ async function fetchGoogleBooksDetails(item, attempt){
   if(info.authors) result.author = info.authors.join(', ');
   if(info.publisher) result.publisher = info.publisher;
   if(info.categories) result.genre = info.categories;
-  const thumb = info.imageLinks && (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail);
-  if(thumb) result.coverUrl = thumb.replace(/^http:/, 'https:');
+  const googleThumb = info.imageLinks && (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail);
   if(info.averageRating) result.goodreadsRating = `${info.averageRating}/5`;
   if(info.description) result.overview = info.description;
   if(info.pageCount) result.pageCount = info.pageCount;
+
+  // Open Library's cover images are noticeably less compressed/higher quality than
+  // Google's thumbnails, so prefer it when this edition actually has one there —
+  // otherwise fall back to Google's thumbnail so coverage stays as complete as before.
+  let isbnForCover = item.isbn && item.isbn.trim() ? item.isbn.trim().replace(/[\s-]/g, '') : null;
+  if(!isbnForCover && Array.isArray(info.industryIdentifiers)){
+    const isbn13 = info.industryIdentifiers.find(id => id.type === 'ISBN_13');
+    const isbn10 = info.industryIdentifiers.find(id => id.type === 'ISBN_10');
+    const found = isbn13 || isbn10;
+    if(found) isbnForCover = found.identifier;
+  }
+
+  if(isbnForCover){
+    const openLibraryUrl = `https://covers.openlibrary.org/b/isbn/${isbnForCover}-L.jpg?default=false`;
+    try{
+      const headResponse = await fetch(openLibraryUrl, { method: 'HEAD' });
+      if(headResponse.ok) result.coverUrl = openLibraryUrl;
+    } catch(e){
+      // couldn't even check — fall through to Google's thumbnail below
+    }
+  }
+  if(!result.coverUrl && googleThumb){
+    result.coverUrl = googleThumb.replace(/^http:/, 'https:');
+  }
+
   return result;
 }
 
