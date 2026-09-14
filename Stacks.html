@@ -527,6 +527,10 @@ const OMDB_API_KEY = "b8f2bf12";
 // cover art, and its own Metacritic-style score, all from a free key.
 const RAWG_API_KEY = "2b3dccb6a6da49978a8a7f83b5ad31b7";
 
+// A personal Google Books key keeps lookups counted under your own quota instead of
+// the shared unauthenticated pool every key-less app draws from worldwide.
+const GOOGLE_BOOKS_API_KEY = "AIzaSyCucFNwEJ8Snp4Osm-r-L2rLl5gEVxMdNk";
+
 const FORMAT_COLOR_MAP = {'DVD':'#6e8fb0','Blu-Ray':'#b0475c','4K':'#d4a544','Digital':'#5fa88c'};
 const FORMAT_FALLBACK_PALETTE = ['#8a6fb0','#c97a4a','#4c8ef0','#7a9e4a','#b0a0d0','#4aa0a8','#c96e8f','#6ab08a','#a88a4a','#7a8fc9'];
 function getFormatColor(fmt){
@@ -1571,7 +1575,7 @@ async function fetchGoogleBooksDetails(item, attempt){
     if(item.author) parts.push(`inauthor:${item.author}`);
     query = parts.join('+');
   }
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}`;
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&key=${GOOGLE_BOOKS_API_KEY}`;
 
   let response;
   try{
