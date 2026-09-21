@@ -395,6 +395,35 @@
   .modal-title-wrap .sub{color:var(--text-muted);font-size:13px;}
   .modal-body{padding:20px 24px 24px;}
   .field-row{margin-bottom:14px;}
+  .detail-row{margin-bottom:16px;}
+  .detail-label{
+    display:block;
+    font-size:12px;
+    color:var(--text-muted);
+    margin-bottom:4px;
+  }
+  .detail-value{
+    font-size:14px;
+    color:var(--text);
+    line-height:1.6;
+  }
+  .detail-value.not-filled{
+    color:var(--text-faint);
+    font-style:italic;
+  }
+  .detail-dot{
+    display:inline-block;
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    margin-right:6px;
+  }
+  .detail-chip{
+    display:inline-flex;
+    align-items:center;
+    margin-right:14px;
+    margin-bottom:4px;
+  }
   .field-row label{
     display:block;
     font-size:12px;
@@ -479,7 +508,7 @@ const CATEGORY_CONFIG = {
     fields:[
       {key:'title', label:'Title', type:'text', required:true, placeholder:'Title'},
       {key:'year', label:'Release year', type:'number', placeholder:'2024'},
-      {key:'series', label:'Series (optional)', type:'text', placeholder:'e.g. Marvel Cinematic Universe'},
+      {key:'series', label:'Series (optional)', type:'tags', placeholder:'Comma-separated if it belongs to more than one'},
       {key:'studio', label:'Studio', type:'text', placeholder:'Not filled in yet'},
       {key:'genre', label:'Genre', type:'tags', placeholder:'Comma-separated, e.g. Action, Sci-Fi'},
       {key:'mpaRating', label:'MPA rating', type:'text', placeholder:'e.g. PG-13'},
@@ -524,7 +553,7 @@ const CATEGORY_CONFIG = {
       {key:'formats', label:'Format', type:'checkboxes', options:['Hardcover','Paperback','Ebook','Audiobook']},
       {key:'special', label:'Special edition (optional)', type:'text', placeholder:'e.g. signed copy, sprayed edges, deluxe edition'},
       {key:'publisher', label:'Publisher', type:'text', placeholder:'Not filled in yet'},
-      {key:'series', label:'Series (optional)', type:'text', placeholder:'e.g. a book series'},
+      {key:'series', label:'Series (optional)', type:'tags', placeholder:'Comma-separated if it belongs to more than one'},
       {key:'genre', label:'Genre', type:'tags', placeholder:'Comma-separated'},
       {key:'pageCount', label:'Pages', type:'number', placeholder:'e.g. 320'},
       {key:'overview', label:'Overview', type:'textarea', placeholder:'Short synopsis'},
@@ -565,7 +594,7 @@ const CATEGORY_CONFIG = {
       {key:'metacriticRating', label:'Metacritic score', type:'number', placeholder:'e.g. 87'},
       {key:'theme', label:'Theme', type:'text', placeholder:'e.g. First-person shooter, RPG, Platformer'},
       {key:'genre', label:'Genre', type:'tags', placeholder:'Comma-separated'},
-      {key:'series', label:'Series (optional)', type:'text', placeholder:'e.g. a franchise or collection'},
+      {key:'series', label:'Series (optional)', type:'tags', placeholder:'Comma-separated if it belongs to more than one'},
       {key:'coverUrl', label:'Cover art URL', type:'url', placeholder:'https://...'}
     ]
   }
@@ -711,6 +740,16 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// Defensively coerces a tags-type field's stored value into an array. Needed because
+// 'series' used to be a plain text field — existing saved items may still have a raw
+// string there until the user re-saves them, and a bare string has no .join/.includes
+// the way an array does.
+function toArray(val){
+  if(Array.isArray(val)) return val;
+  if(typeof val === 'string' && val.trim()) return val.split(',').map(s=>s.trim()).filter(Boolean);
+  return [];
+}
+
 function currentItems(){
   return state.items.filter(m => m.category === state.activeCategory);
 }
@@ -744,7 +783,7 @@ function getFiltered(){
     const searchable = config.fields.filter(f=>['text','tags','select'].includes(f.type));
     list = list.filter(m => searchable.some(f=>{
       const v = m[f.key];
-      if(f.type==='tags') return (v||[]).join(' ').toLowerCase().includes(q);
+      if(f.type==='tags') return toArray(v).join(' ').toLowerCase().includes(q);
       return (v||'').toString().toLowerCase().includes(q);
     }));
   }
@@ -771,7 +810,7 @@ function availableRowModes(){
   const modes = [];
   if(items.length) modes.push('az');
   if(config.fields.some(f=>f.key==='genre') && items.some(m=>(m.genre||[]).length)) modes.push('genre');
-  if(config.fields.some(f=>f.key==='series') && items.some(m=>m.series && m.series.trim())) modes.push('collection');
+  if(config.fields.some(f=>f.key==='series') && items.some(m=>toArray(m.series).length)) modes.push('collection');
   return modes;
 }
 
@@ -783,7 +822,7 @@ function getGroupedRows(){
     const searchable = config.fields.filter(f=>['text','tags','select'].includes(f.type));
     list = list.filter(m => searchable.some(f=>{
       const v = m[f.key];
-      if(f.type==='tags') return (v||[]).join(' ').toLowerCase().includes(q);
+      if(f.type==='tags') return toArray(v).join(' ').toLowerCase().includes(q);
       return (v||'').toString().toLowerCase().includes(q);
     }));
   }
@@ -799,8 +838,8 @@ function getGroupedRows(){
     list.forEach(m => (m.genre||[]).forEach(g => addTo(g, m)));
     order.sort((a,b)=>a.localeCompare(b));
   } else if(state.rowMode === 'collection'){
-    list.forEach(m => { if(m.series && m.series.trim()) addTo(m.series.trim(), m); });
-    order.sort((a,b)=>a.localeCompare(b));
+    list.forEach(m => toArray(m.series).forEach(s => addTo(s, m)));
+    order.sort((a,b)=>sortableTitle(a).localeCompare(sortableTitle(b)));
   } else {
     list.forEach(m => {
       const firstChar = sortableTitle(m.title)[0] || '';
@@ -862,7 +901,7 @@ function posterCardHtml(m){
     : '';
   const subtitleVal = m[config.subtitleField];
   return `
-    <div class="poster-card" onclick="openModal('${m.id}')">
+    <div class="poster-card" onclick="openDetailView('${m.id}')">
       <div class="poster-art" style="aspect-ratio:${config.aspect};">
         ${artInner}
         <div class="fmt-dots">${dots}</div>
@@ -1118,7 +1157,7 @@ function renderFieldRow(m, field){
     return `<div class="field-row"><label>${escapeHtml(field.label)}</label><input type="${field.type}" id="f-${key}" value="${v}" placeholder="${escapeHtml(field.placeholder||'')}">${isbnTools}</div>`;
   }
   if(field.type==='tags'){
-    const v = (val||[]).join(', ');
+    const v = toArray(val).join(', ');
     return `<div class="field-row"><label>${escapeHtml(field.label)}</label><input type="text" id="f-${key}" value="${escapeHtml(v)}" placeholder="${escapeHtml(field.placeholder||'Comma-separated')}"></div>`;
   }
   if(field.type==='checkboxes'){
@@ -1128,6 +1167,81 @@ function renderFieldRow(m, field){
     return `<div class="field-row"><label>${escapeHtml(field.label)}</label><div class="fmt-checks" id="f-${key}">${field.options.map(o=>`<div class="fmt-check ${val===o?'checked':''}" data-fmt="${escapeHtml(o)}" onclick="selectOne(this)">${escapeHtml(o)}</div>`).join('')}</div></div>`;
   }
   return '';
+}
+
+function openDetailView(id){
+  const m = state.items.find(x=>x.id===id);
+  if(m) renderDetailView(m);
+}
+
+function renderDetailView(item){
+  closeModal();
+  const config = CATEGORY_CONFIG[item.category];
+  const displayFields = config.fields.filter(f => f.key !== 'title' && f.key !== 'coverUrl');
+
+  const rowsHtml = displayFields.map(field => {
+    const val = item[field.key];
+    const label = escapeHtml(field.label.replace(' (optional)', ''));
+    let inner = '';
+    let isEmpty = false;
+
+    if(field.type === 'tags'){
+      const arr = toArray(val);
+      isEmpty = arr.length === 0;
+      inner = arr.map(v=>escapeHtml(v)).join(', ');
+    } else if(field.type === 'checkboxes'){
+      const arr = Array.isArray(val) ? val : [];
+      isEmpty = arr.length === 0;
+      inner = arr.map(v=>`<span class="detail-chip"><span class="detail-dot" style="background:${getFormatColor(v)};"></span>${escapeHtml(v)}</span>`).join('');
+    } else if(field.type === 'textarea'){
+      isEmpty = !val;
+      inner = escapeHtml(val);
+    } else if(field.key === 'trailerUrl'){
+      isEmpty = !val;
+      inner = val ? `<a href="${escapeHtml(val)}" target="_blank" rel="noopener" style="color:var(--accent);">Watch trailer</a>` : '';
+    } else {
+      isEmpty = val === undefined || val === null || val === '';
+      inner = escapeHtml(val);
+    }
+
+    if(isEmpty) inner = 'Not filled in yet';
+    return `<div class="detail-row"><span class="detail-label">${label}</span><div class="detail-value${isEmpty?' not-filled':''}">${inner}</div></div>`;
+  }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.onclick = (e)=>{ if(e.target === overlay) closeModal(); };
+  overlay.innerHTML = `
+    <div class="modal">
+      <button class="close-x" onclick="closeModal()">×</button>
+      <div class="modal-head">
+        <div class="modal-poster" style="aspect-ratio:${config.aspect};">
+          ${item.coverUrl ? `<img src="${escapeHtml(item.coverUrl)}" onerror="this.parentElement.innerHTML=window.placeholderHtml('${item.id}')">` : placeholderHtml(item.id)}
+        </div>
+        <div class="modal-title-wrap">
+          <h2>${escapeHtml(item.title)}</h2>
+          <div class="sub">${item.year || ''}</div>
+        </div>
+      </div>
+      <div class="modal-body">
+        ${rowsHtml}
+        <div class="modal-actions">
+          <div class="left">
+            <button class="danger" onclick="deleteItem('${item.id}')">Remove</button>
+          </div>
+          <div class="right">
+            <button class="primary" onclick="openModal('${item.id}')">Edit</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const showModal = () => {
+    const modalEl = overlay.querySelector('.modal');
+    if(modalEl) modalEl.classList.add('modal-visible');
+  };
+  if(typeof requestAnimationFrame === 'function'){ requestAnimationFrame(showModal); } else { setTimeout(showModal, 16); }
 }
 
 function renderModal(m){
@@ -1213,14 +1327,18 @@ function saveModal(){
     if(idx>-1){
       state.items[idx] = {...state.items[idx], ...payload};
     }
+    saveLibrary();
+    render();
+    showToast('Saved');
+    if(idx>-1) renderDetailView(state.items[idx]);
   } else {
     const id = 'i' + Date.now();
     state.items.push({id, category, ...payload, enriched});
+    saveLibrary();
+    closeModal();
+    render();
+    showToast('Added to your library');
   }
-  saveLibrary();
-  closeModal();
-  render();
-  showToast(editingId ? 'Saved' : 'Added to your library');
 }
 
 function deleteItem(id){
