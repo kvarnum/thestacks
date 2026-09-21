@@ -6,9 +6,11 @@
 <title>The Stacks — Media Library</title>
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="apple-touch-icon.png" type="image/png">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=DM+Sans:wght@400;600&display=swap">
 <style>
   :root{
-    --bg:#12141a;
+    --bg:#0a0a0c;
     --bg-elevated:#1b1e27;
     --card:#21242f;
     --card-hover:#282c3a;
@@ -23,8 +25,8 @@
     --blue:#6e8fb0;
     --red:#b0475c;
     --teal:#5fa88c;
-    --serif: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
-    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    --serif: 'Fraunces', Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+    --sans: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;}
@@ -389,6 +391,7 @@
     .modal-head{flex-direction:column;}
     .modal-poster{width:100px;}
     .category-tabs{gap:14px;overflow-x:auto;}
+    .grid{grid-template-columns:repeat(auto-fill, minmax(100px, 1fr));gap:10px;}
   }
 </style>
 </head>
@@ -1262,6 +1265,7 @@ async function lookupByIsbn(){
 }
 
 let activeBarcodeReader = null;
+let barcodeHandled = false;
 
 function loadZxingScript(){
   return new Promise((resolve, reject) => {
@@ -1275,6 +1279,7 @@ function loadZxingScript(){
 }
 
 async function openBarcodeScanner(){
+  barcodeHandled = false;
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   overlay.id = 'barcode-overlay';
@@ -1299,7 +1304,13 @@ async function openBarcodeScanner(){
     const devices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
     const rearCamera = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[devices.length-1];
     activeBarcodeReader.decodeFromVideoDevice(rearCamera ? rearCamera.deviceId : undefined, videoEl, (result, err) => {
-      if(result){
+      // The camera keeps feeding frames to this callback continuously, so the same
+      // barcode can trigger it several times in the instant before the reader actually
+      // stops — without this guard, each of those extra firings kicked off its own
+      // Google Books lookup on top of the one already running, which is what made the
+      // scanner appear to hang.
+      if(result && !barcodeHandled){
+        barcodeHandled = true;
         const isbn = result.getText();
         if(statusEl) statusEl.textContent = 'Found: ' + isbn;
         closeBarcodeScanner();
@@ -1318,6 +1329,7 @@ async function openBarcodeScanner(){
 }
 
 function closeBarcodeScanner(){
+  barcodeHandled = true;
   if(activeBarcodeReader){
     try{ activeBarcodeReader.reset(); } catch(e){ /* already stopped */ }
     activeBarcodeReader = null;
