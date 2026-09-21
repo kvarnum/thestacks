@@ -853,10 +853,15 @@ function getGroupedRows(){
     });
   }
 
-  return order.map(label => ({
-    label,
-    items: groups[label].sort((a,b)=>sortableTitle(a.title).localeCompare(sortableTitle(b.title)))
-  }));
+  return order.map(label => {
+    const items = groups[label].slice();
+    if(state.rowMode === 'collection'){
+      items.sort((a,b)=>(a.year||0)-(b.year||0));
+    } else {
+      items.sort((a,b)=>sortableTitle(a.title).localeCompare(sortableTitle(b.title)));
+    }
+    return {label, items};
+  });
 }
 
 function setViewMode(mode){
