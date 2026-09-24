@@ -1407,12 +1407,24 @@ async function handleImportFile(fileInput){
       fileInput.value = '';
       return;
     }
-    const proceed = confirm(`Import ${parsed.length} items? This replaces your current library of ${state.items.length} items — this can't be undone.`);
-    if(!proceed){ fileInput.value = ''; return; }
-    state.items = parsed;
-    await saveLibrary();
-    render();
-    showToast(`Imported ${parsed.length} items`);
+    const wantsMerge = confirm(`Add these ${parsed.length} items to your existing library of ${state.items.length}, keeping everything you already have?\n\nClick Cancel instead to fully replace your library with just this file.`);
+    if(wantsMerge){
+      // Guard against the rare case of an id collision with something already in the
+      // library — regenerate just that item's id rather than let one overwrite the other.
+      const existingIds = new Set(state.items.map(m=>m.id));
+      const toAdd = parsed.map((item, i) => existingIds.has(item.id) ? {...item, id: `i${Date.now()}_${i}`} : item);
+      state.items = [...state.items, ...toAdd];
+      await saveLibrary();
+      render();
+      showToast(`Added ${parsed.length} items to your library`);
+    } else {
+      const proceedReplace = confirm(`Replace your ENTIRE library of ${state.items.length} items with just these ${parsed.length}? This can't be undone.`);
+      if(!proceedReplace){ fileInput.value = ''; return; }
+      state.items = parsed;
+      await saveLibrary();
+      render();
+      showToast(`Imported ${parsed.length} items`);
+    }
   } catch(e){
     console.error('import failed', e);
     showToast("Could not read that file — make sure it's a Stacks export");
