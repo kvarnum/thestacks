@@ -853,6 +853,23 @@ function getChipField(config){
   return config.fields.find(f=>f.type==='checkboxes');
 }
 
+// The pill row and dropdowns are a separate concern from getChipField above (which
+// drives the poster dots and stats breakdown, and should keep reflecting whichever
+// field came first — Console for Games — regardless of filter-UI presentation).
+// Here, whichever checkboxes field has the fewest options becomes clickable pills;
+// any other checkboxes field is filtered via a dropdown instead, since a long list
+// (like Video Games' 15 consoles) doesn't work well as a row of pills.
+function getPillFilterField(config){
+  const checkboxFields = config.fields.filter(f=>f.type==='checkboxes');
+  if(checkboxFields.length === 0) return null;
+  return checkboxFields.slice().sort((a,b)=>a.options.length-b.options.length)[0];
+}
+
+function getDropdownCheckboxFields(config){
+  const pillField = getPillFilterField(config);
+  return config.fields.filter(f=>f.type==='checkboxes' && f !== pillField);
+}
+
 // Uses Claude's artifact storage when available (inside this chat), and falls back to
 // the browser's own localStorage otherwise (e.g. once hosted as a standalone page) —
 // so the exact same file works correctly in both places without any changes.
@@ -897,6 +914,7 @@ let state = {
   search: '',
   activeFilter: 'All',
   genreFilter: 'All',
+  checkboxFilters: {},
   sortBy: 'title',
   viewMode: 'grid',
   rowMode: 'az',
@@ -1010,11 +1028,17 @@ function creatorLastName(name){
 
 function getFiltered(){
   const config = CATEGORY_CONFIG[state.activeCategory];
-  const chipField = getChipField(config);
+  const pillField = getPillFilterField(config);
   let list = currentItems();
-  if(chipField && state.activeFilter !== 'All'){
-    list = list.filter(m => (m[chipField.key]||[]).includes(state.activeFilter));
+  if(pillField && state.activeFilter !== 'All'){
+    list = list.filter(m => (m[pillField.key]||[]).includes(state.activeFilter));
   }
+  getDropdownCheckboxFields(config).forEach(f => {
+    const val = state.checkboxFilters[f.key];
+    if(val && val !== 'All'){
+      list = list.filter(m => (m[f.key]||[]).includes(val));
+    }
+  });
   if(state.search.trim()){
     const q = state.search.trim().toLowerCase();
     const searchable = config.fields.filter(f=>['text','tags','select'].includes(f.type));
@@ -1206,6 +1230,7 @@ function render(){
   const filtered = getFiltered();
   const chipField = stats.chipField;
   const statFormatKeys = chipField ? chipField.options.slice(0,4) : [];
+  const pillField = getPillFilterField(config);
 
   app.innerHTML = `
     <header class="top">
@@ -1272,9 +1297,9 @@ function render(){
 
     ${state.viewMode === 'grid' ? `
     <div class="filters">
-      ${chipField ? `
+      ${pillField ? `
       <div class="chips">
-        ${['All', ...chipField.options].map(f=>`<div class="chip ${state.activeFilter===f?'active':''}" onclick="setFilter('${escapeHtml(f)}')">${escapeHtml(f)}</div>`).join('')}
+        ${['All', ...pillField.options].map(f=>`<div class="chip ${state.activeFilter===f?'active':''}" onclick="setFilter('${escapeHtml(f)}')">${escapeHtml(f)}</div>`).join('')}
       </div>` : `<div></div>`}
       <div class="sort-wrap">
         ${config.fields.some(f=>f.key==='genre') ? `
@@ -1283,6 +1308,12 @@ function render(){
           <option value="All" ${state.genreFilter==='All'?'selected':''}>All</option>
           ${getAllGenres().map(g=>`<option value="${escapeHtml(g)}" ${state.genreFilter===g?'selected':''}>${escapeHtml(g)}</option>`).join('')}
         </select>` : ''}
+        ${getDropdownCheckboxFields(config).map(f => `
+        ${escapeHtml(f.label.replace(/\(s\)( owned)?( on)?/i, '').trim())}
+        <select onchange="setCheckboxFilter('${f.key}', this.value)">
+          <option value="All" ${(!state.checkboxFilters[f.key] || state.checkboxFilters[f.key]==='All')?'selected':''}>All</option>
+          ${f.options.map(o=>`<option value="${escapeHtml(o)}" ${state.checkboxFilters[f.key]===o?'selected':''}>${escapeHtml(o)}</option>`).join('')}
+        </select>`).join('')}
         Sort by
         <select onchange="setSort(this.value)">
           <option value="title" ${state.sortBy==='title'?'selected':''}>Title A–Z</option>
@@ -1343,6 +1374,7 @@ function onSearch(v){
 }
 function setFilter(f){ state.activeFilter = f; render(); }
 function setGenreFilter(g){ state.genreFilter = g; render(); }
+function setCheckboxFilter(key, value){ state.checkboxFilters[key] = value; render(); }
 function setSort(v){ state.sortBy = v; render(); }
 function exportLibrary(){
   const blob = new Blob([JSON.stringify(state.items, null, 2)], {type:'application/json'});
@@ -1392,6 +1424,7 @@ function setCategory(cat){
   state.activeCategory = cat;
   state.activeFilter = 'All';
   state.genreFilter = 'All';
+  state.checkboxFilters = {};
   state.search = '';
   if(!availableRowModes().includes(state.rowMode)){
     state.rowMode = availableRowModes()[0] || 'az';
